@@ -1,4 +1,4 @@
-# Ritmics — etapa 5
+# Ritmics — etapa 6
 
 Aplicativo Android nativo em **Java e XML**, com um metrônomo técnico funcional.
 
@@ -22,11 +22,14 @@ Aplicativo Android nativo em **Java e XML**, com um metrônomo técnico funciona
   janela refratária e sensibilidade ajustável.
 - Prova guiada de interferência do próprio clique, com fases de silêncio, clique e cauda,
   resultado inconclusivo para clipping/silenciamento/volume desligado e recomendação de fones.
+- Calibração de ruído com sensibilidade sugerida, medição acústica robusta com rejeição de
+  outliers e ajuste manual separado.
+- Perfis locais por rota de entrada/saída, taxa e fonte, com confiança e dispersão explícitas.
 - Testes do agendamento, geração PCM, escritas parciais, cancelamento e medição de nível.
 - Testes determinísticos do detector, do ensaio de interferência e do mapeamento robusto de relógio.
 
-**Ainda não faz parte desta versão:** associação das detecções às notas, calibração acústica,
-avaliação musical, pista de notas, sessões com duração, histórico ou preferências permanentes.
+**Ainda não faz parte desta versão:** associação das detecções às notas, avaliação musical,
+pista de notas, sessões com duração, histórico ou preferências musicais permanentes.
 O manifesto não pede internet ou armazenamento. A tela segue o protótipo visual de treino (tema escuro);
 o modo **Gravado** aparece como “Em breve” e não simula funções futuras. Volume, microfone, sensibilidade,
 teste de interferência e diagnóstico ficam no painel de configurações (engrenagem).
@@ -114,10 +117,13 @@ requisitos versionados. Em outra máquina, configure seu próprio JDK/SDK.
    entrada; o feedback ao vivo aparece na tela principal. A
    permissão aparece ao iniciar, nunca na abertura do aplicativo. O áudio é processado
    em memória e descartado; ainda não há detecção ou avaliação.
-5. Silencie os cliques para manter a geração musical sem som. Isso ainda não é um
+5. Em **Calibração de tempo**, calibre primeiro o ruído. Para medir o caminho acústico,
+   deixe o ambiente silencioso e não bata enquanto os cliques tocam. Bluetooth é recusado
+   para calibração de precisão por ter atraso variável.
+6. Silencie os cliques para manter a geração musical sem som. Isso ainda não é um
    exercício de treino visual.
-6. Pressione **Parar Treino** antes de alterar compasso, acento ou subdivisão.
-6. Ao iniciar novamente, a contagem recomeça no primeiro tempo; não há retomada de
+7. Pressione **Parar Treino** antes de alterar compasso, acento ou subdivisão.
+8. Ao iniciar novamente, a contagem recomeça no primeiro tempo; não há retomada de
    uma sessão parcialmente tocada nesta etapa.
 
 O volume de mídia do sistema também afeta a saída. Controles são preservados na
@@ -140,11 +146,11 @@ e [próximas etapas](docs/stages.md).
 O agendamento evita deriva de **arredondamento acumulado** no fluxo PCM. Isso não
 prova ausência de drift do relógio físico, latência, jitter acústico ou efeitos do
 sistema. Frames escritos e eventos gerados **não são timestamps de apresentação**.
-O mapeamento de captura e saída agora expõe timestamps monotônicos do sistema quando
-disponíveis e uma estimativa identificada quando não estão. Isso não mede a apresentação
-acústica nem compensa latência de rota; a prova física e a calibração entrarão nas etapas
-seguintes. O detector informa eventos candidatos, mas não atribui notas ou resultados
-musicais nesta versão.
+O mapeamento de captura e saída expõe timestamps monotônicos do sistema quando disponíveis
+e uma estimativa identificada quando não estão. O ensaio da etapa 6 mede o caminho completo
+entre clique esperado e som capturado; não isola latência de saída, ar, microfone e captura.
+O perfil só será aplicado à avaliação na etapa 7. O detector informa eventos candidatos,
+mas ainda não atribui notas ou resultados musicais.
 
 ## Dependências
 

@@ -111,6 +111,94 @@
                     style="@style/Text.Ritmics.Section"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    android:text="@string/calibration_title" />
+
+                <TextView
+                    style="@style/Text.Ritmics.Body"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:text="@string/calibration_explanation" />
+
+                <TextView
+                    android:id="@+id/calibration_profile"
+                    style="@style/Text.Ritmics.Mono"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:text="@string/calibration_no_profile"
+                    android:textIsSelectable="true" />
+
+                <Button
+                    android:id="@+id/calibration_noise"
+                    style="@style/Widget.Ritmics.SecondaryButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:text="@string/calibration_noise_start" />
+
+                <Button
+                    android:id="@+id/calibration_latency"
+                    style="@style/Widget.Ritmics.SecondaryButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:text="@string/calibration_latency_start" />
+
+                <TextView
+                    android:id="@+id/calibration_status"
+                    style="@style/Text.Ritmics.Body"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:accessibilityLiveRegion="polite"
+                    android:text="@string/calibration_idle" />
+
+                <TextView
+                    android:id="@+id/manual_offset_label"
+                    style="@style/Text.Ritmics.Label"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="18dp"
+                    android:labelFor="@id/manual_offset"
+                    android:text="@string/calibration_manual_zero" />
+
+                <SeekBar
+                    android:id="@+id/manual_offset"
+                    style="@style/Widget.Ritmics.SeekBar"
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:contentDescription="@string/calibration_manual_description"
+                    android:max="300"
+                    android:progress="150" />
+
+                <TextView
+                    style="@style/Text.Ritmics.Body"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/calibration_manual_hint" />
+
+                <Button
+                    android:id="@+id/calibration_reset"
+                    style="@style/Widget.Ritmics.SecondaryButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:text="@string/calibration_reset" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:background="@drawable/panel_background"
+                android:orientation="vertical"
+                android:padding="18dp">
+
+                <TextView
+                    style="@style/Text.Ritmics.Section"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
                     android:text="@string/microphone_title" />
 
                 <androidx.appcompat.widget.SwitchCompat

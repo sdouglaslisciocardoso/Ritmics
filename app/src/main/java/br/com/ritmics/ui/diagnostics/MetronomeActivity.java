@@ -41,6 +41,10 @@ import androidx.core.view.WindowInsetsControllerCompat;
 import br.com.ritmics.R;
 import br.com.ritmics.audio.input.AudioInputEngine;
 import br.com.ritmics.audio.output.MetronomeEngine;
+import br.com.ritmics.calibration.AudioRouteInfo;
+import br.com.ritmics.calibration.CalibrationRepository;
+import br.com.ritmics.core.calibration.CalibrationProfile;
+import br.com.ritmics.core.calibration.LatencyCalibration;
 import br.com.ritmics.core.music.MetronomeConfig;
 import br.com.ritmics.core.audio.InterferenceProbe;
 import br.com.ritmics.core.time.MonotonicClockMapper;
@@ -52,6 +56,9 @@ import java.util.Locale;
  */
 public final class MetronomeActivity extends AppCompatActivity {
     private static final int REQUEST_RECORD_AUDIO = 1001;
+    private static final long NOISE_MEASUREMENT_NANOS = 3_000_000_000L;
+    private static final long ACOUSTIC_TIMEOUT_NANOS = 18_000_000_000L;
+    private enum CalibrationMode { IDLE, NOISE, ACOUSTIC }
     private static final int[] METER_IDS = {R.id.meter_2_4, R.id.meter_3_4, R.id.meter_4_4, R.id.meter_6_8};
     private static final int[] METER_BEATS = {2, 3, 4, 6};
     private static final int[] SUBDIVISION_IDS = {R.id.subdivision_1, R.id.subdivision_2,
@@ -90,6 +97,20 @@ public final class MetronomeActivity extends AppCompatActivity {
     private TextView sensitivityLabel, detectorStatus, probeStatus;
     private Button probeStart;
     private final InterferenceProbe probe = new InterferenceProbe();
+    private CalibrationRepository calibrationRepository;
+    private CalibrationProfile calibrationProfile;
+    private AudioRouteInfo calibrationRoute;
+    private String loadedRouteKey;
+    private CalibrationMode calibrationMode = CalibrationMode.IDLE;
+    private LatencyCalibration latencyCalibration;
+    private long calibrationStartedNanos, measurementStartedNanos, lastCalibrationDetection;
+    private double noiseSum;
+    private int noiseSamples;
+    private boolean noisePermissionPending, acousticPermissionPending;
+    private double manualAdjustmentMs;
+    private Button calibrateNoise, calibrateLatency, resetCalibration;
+    private SeekBar manualOffset;
+    private TextView calibrationStatus, calibrationProfileView, manualOffsetLabel;
 
     private final OnBackPressedCallback closeSettingsOnBack = new OnBackPressedCallback(false) {
         @Override public void handleOnBackPressed() { showSettings(false); }
@@ -120,6 +141,7 @@ public final class MetronomeActivity extends AppCompatActivity {
         setVolumeControlStream(AudioManager.STREAM_MUSIC);
         engine = new MetronomeEngine(getApplicationContext());
         inputEngine = new AudioInputEngine((AudioManager) getSystemService(AUDIO_SERVICE), null);
+        calibrationRepository = new CalibrationRepository(getApplicationContext());
         configureInsets();
         bpmInput = findViewById(R.id.bpm_input);
         bpmSlider = findViewById(R.id.bpm_slider);
@@ -146,6 +168,13 @@ public final class MetronomeActivity extends AppCompatActivity {
         detectorStatus = findViewById(R.id.detector_status);
         probeStatus = findViewById(R.id.probe_status);
         probeStart = findViewById(R.id.probe_start);
+        calibrateNoise = findViewById(R.id.calibration_noise);
+        calibrateLatency = findViewById(R.id.calibration_latency);
+        resetCalibration = findViewById(R.id.calibration_reset);
+        manualOffset = findViewById(R.id.manual_offset);
+        manualOffsetLabel = findViewById(R.id.manual_offset_label);
+        calibrationStatus = findViewById(R.id.calibration_status);
+        calibrationProfileView = findViewById(R.id.calibration_profile);
         mainScreen = findViewById(R.id.main_screen);
         settingsPanel = findViewById(R.id.settings_panel);
         livePanel = findViewById(R.id.live_panel);
@@ -163,9 +192,17 @@ public final class MetronomeActivity extends AppCompatActivity {
         updateVolume();
         sensitivity.setProgress(savedState == null ? 50 : savedState.getInt("sensitivity", 50));
         updateSensitivity();
+        manualAdjustmentMs = savedState == null ? 0 : savedState.getDouble("manualAdjustmentMs", 0);
+        manualOffset.setProgress((int) Math.round(manualAdjustmentMs) + 150);
+        updateManualAdjustment(false);
         sensitivity.setOnSeekBarChangeListener(new SimpleSeekListener() {
             @Override public void onProgressChanged(SeekBar bar, int progress, boolean fromUser) {
                 updateSensitivity();
+            }
+        });
+        manualOffset.setOnSeekBarChangeListener(new SimpleSeekListener() {
+            @Override public void onProgressChanged(SeekBar bar, int progress, boolean fromUser) {
+                updateManualAdjustment(fromUser);
             }
         });
 
@@ -201,7 +238,20 @@ public final class MetronomeActivity extends AppCompatActivity {
             useMicrophone.setChecked(true);
             requestStart(true);
         });
+        calibrateNoise.setOnClickListener(view -> requestNoiseCalibration());
+        calibrateLatency.setOnClickListener(view -> requestAcousticCalibration());
+        resetCalibration.setOnClickListener(view -> {
+            calibrationRepository.clearAll();
+            calibrationProfile = null;
+            calibrationRoute = null;
+            manualAdjustmentMs = 0;
+            manualOffset.setProgress(150);
+            updateManualAdjustment(false);
+            calibrationProfileView.setText(R.string.calibration_no_profile);
+            calibrationStatus.setText(R.string.calibration_reset_done);
+        });
         stop.setOnClickListener(view -> {
+            cancelCalibration(true);
             probePending = false;
             probe.cancel();
             inputEngine.stop(AudioInputEngine.StopReason.USER);
@@ -310,8 +360,84 @@ public final class MetronomeActivity extends AppCompatActivity {
         inputEngine.setSensitivity(sensitivity.getProgress() / 100f);
     }
 
+    private void updateManualAdjustment(boolean persist) {
+        manualAdjustmentMs = manualOffset.getProgress() - 150;
+        if (manualAdjustmentMs == 0) manualOffsetLabel.setText(R.string.calibration_manual_zero);
+        else manualOffsetLabel.setText(getString(R.string.calibration_manual_value,
+                (int) manualAdjustmentMs));
+        ViewCompat.setStateDescription(manualOffset,
+                getString(R.string.calibration_manual_value, (int) manualAdjustmentMs));
+        if (persist && calibrationProfile != null) {
+            calibrationProfile = calibrationProfile.withManualAdjustment(manualAdjustmentMs);
+            calibrationRepository.save(calibrationProfile);
+            showCalibrationProfile(calibrationProfile);
+        }
+    }
+
+    private void requestNoiseCalibration() {
+        if (engine.snapshot().isBusy() || inputEngine.isBusy()) return;
+        useMicrophone.setChecked(true);
+        noisePermissionPending = true;
+        acousticPermissionPending = false;
+        if (!hasMicrophonePermission()) { requestMicrophonePermission(); return; }
+        beginNoiseCalibration();
+    }
+
+    private void requestAcousticCalibration() {
+        if (engine.snapshot().isBusy() || inputEngine.isBusy()) return;
+        useMicrophone.setChecked(true);
+        acousticPermissionPending = true;
+        noisePermissionPending = false;
+        if (!hasMicrophonePermission()) { requestMicrophonePermission(); return; }
+        beginAcousticCalibration();
+    }
+
+    private void beginNoiseCalibration() {
+        noisePermissionPending = false;
+        calibrationMode = CalibrationMode.NOISE;
+        calibrationStartedNanos = measurementStartedNanos = 0;
+        noiseSum = 0; noiseSamples = 0;
+        sessionWithInput = false;
+        calibrationStatus.setText(R.string.calibration_noise_settling);
+        if (!inputEngine.start()) failCalibration(R.string.calibration_latency_failed);
+    }
+
+    private void beginAcousticCalibration() {
+        acousticPermissionPending = false;
+        calibrationMode = CalibrationMode.ACOUSTIC;
+        calibrationStartedNanos = System.nanoTime();
+        measurementStartedNanos = 0;
+        lastCalibrationDetection = -1;
+        latencyCalibration = new LatencyCalibration();
+        sessionWithInput = true;
+        calibrationStatus.setText(R.string.calibration_latency_waiting);
+        MetronomeConfig calibrationConfig = new MetronomeConfig(120, 4, 1,
+                MetronomeConfig.defaultAccents(4));
+        if (!inputEngine.start()
+                || !engine.start(calibrationConfig, Math.max(.25f, volume.getProgress() / 100f), false)) {
+            inputEngine.stop(AudioInputEngine.StopReason.ERROR);
+            engine.stop(MetronomeEngine.StopReason.FAILURE);
+            failCalibration(R.string.calibration_latency_failed);
+        }
+    }
+
+    private void cancelCalibration(boolean userVisible) {
+        if (calibrationMode == CalibrationMode.IDLE) return;
+        calibrationMode = CalibrationMode.IDLE;
+        noisePermissionPending = acousticPermissionPending = false;
+        latencyCalibration = null;
+        if (userVisible) calibrationStatus.setText(R.string.calibration_cancelled);
+    }
+
+    private void failCalibration(int message) {
+        calibrationMode = CalibrationMode.IDLE;
+        latencyCalibration = null;
+        calibrationStatus.setText(message);
+    }
+
     private void requestStart(boolean testing) {
         if (!applyTypedBpm()) return;
+        noisePermissionPending = acousticPermissionPending = false;
         // Preserve the intent while the permission dialog is visible so a granted
         // permission can continue the exact action the user requested.
         probePending = testing;
@@ -330,6 +456,7 @@ public final class MetronomeActivity extends AppCompatActivity {
     private void requestMicrophonePermission() {
         if (permissionAsked && !ActivityCompat.shouldShowRequestPermissionRationale(this,
                 Manifest.permission.RECORD_AUDIO)) {
+            noisePermissionPending = acousticPermissionPending = false;
             microphoneStatus.setText(R.string.microphone_permission_blocked);
             microphoneSettings.setVisibility(View.VISIBLE);
             return;
@@ -365,16 +492,20 @@ public final class MetronomeActivity extends AppCompatActivity {
             permissionAsked = false;
             refreshState();
             microphoneStatus.setText(R.string.microphone_granted);
-            if (useMicrophone.isChecked()) startSession();
+            if (noisePermissionPending) beginNoiseCalibration();
+            else if (acousticPermissionPending) beginAcousticCalibration();
+            else if (useMicrophone.isChecked()) startSession();
             else probePending = false;
             return;
         } else if (!ActivityCompat.shouldShowRequestPermissionRationale(this,
                 Manifest.permission.RECORD_AUDIO)) {
             probePending = false;
+            noisePermissionPending = acousticPermissionPending = false;
             microphoneStatus.setText(R.string.microphone_permission_blocked);
             microphoneSettings.setVisibility(View.VISIBLE);
         } else {
             probePending = false;
+            noisePermissionPending = acousticPermissionPending = false;
             microphoneStatus.setText(R.string.microphone_no_permission);
         }
         refreshState();
@@ -457,6 +588,8 @@ public final class MetronomeActivity extends AppCompatActivity {
         if (sessionWithInput && (input.state == AudioInputEngine.State.ERROR
                 || input.state == AudioInputEngine.State.IDLE || input.state == AudioInputEngine.State.STOPPING)
                 && state.isBusy()) engine.stop(MetronomeEngine.StopReason.FAILURE);
+        updateCalibration(state, input);
+        loadProfileForActiveRoute(state, input);
         updateProbe(state, input);
         boolean busy = state.isBusy() || input.isBusy();
         boolean stoppable = state.state == MetronomeEngine.State.PLAYING
@@ -475,6 +608,10 @@ public final class MetronomeActivity extends AppCompatActivity {
         useMicrophone.setEnabled(!busy);
         boolean testing = probePending || probe.isRunning();
         probeStart.setEnabled(!busy && !testing);
+        calibrateNoise.setEnabled(!busy && calibrationMode == CalibrationMode.IDLE);
+        calibrateLatency.setEnabled(!busy && calibrationMode == CalibrationMode.IDLE);
+        resetCalibration.setEnabled(!busy && calibrationMode == CalibrationMode.IDLE);
+        manualOffset.setEnabled(!busy && calibrationMode == CalibrationMode.IDLE);
         volume.setEnabled(!testing);
         mute.setEnabled(!testing);
         sensitivity.setEnabled(!testing);
@@ -562,6 +699,156 @@ public final class MetronomeActivity extends AppCompatActivity {
         return getString(quality == MonotonicClockMapper.Quality.HARDWARE ? R.string.clock_hardware
                 : quality == MonotonicClockMapper.Quality.ESTIMATED ? R.string.clock_estimated : R.string.clock_pending);
     }
+
+    private void updateCalibration(MetronomeEngine.Snapshot output, AudioInputEngine.Snapshot input) {
+        if (calibrationMode == CalibrationMode.IDLE) return;
+        long now = System.nanoTime();
+        if (calibrationMode == CalibrationMode.NOISE) {
+            if (input.state == AudioInputEngine.State.ERROR) {
+                failCalibration(R.string.calibration_latency_failed);
+                return;
+            }
+            if (input.state != AudioInputEngine.State.CAPTURING || input.settling) {
+                calibrationStatus.setText(R.string.calibration_noise_settling);
+                return;
+            }
+            if (measurementStartedNanos == 0) measurementStartedNanos = now;
+            calibrationStatus.setText(R.string.calibration_noise_measuring);
+            noiseSum += input.noiseRms;
+            noiseSamples++;
+            if (now - measurementStartedNanos < NOISE_MEASUREMENT_NANOS) return;
+            float averageNoise = (float) (noiseSum / Math.max(1, noiseSamples));
+            float recommended = LatencyCalibration.recommendedSensitivity(averageNoise);
+            sensitivity.setProgress(Math.round(recommended * 100));
+            updateSensitivity();
+            AudioManager manager = (AudioManager) getSystemService(AUDIO_SERVICE);
+            calibrationRoute = AudioRouteInfo.resolve(manager, input.routeId, -1,
+                    input.sampleRate, 0, input.source);
+            double dbfs = 20 * Math.log10(Math.max(1e-6, averageNoise));
+            calibrationProfile = new CalibrationProfile(calibrationRoute.key, calibrationRoute.label,
+                    System.currentTimeMillis(), 0, manualAdjustmentMs, dbfs, recommended, 0, 0,
+                    CalibrationProfile.Confidence.UNAVAILABLE,
+                    input.clockQuality == MonotonicClockMapper.Quality.HARDWARE, false);
+            calibrationRepository.save(calibrationProfile);
+            showCalibrationProfile(calibrationProfile);
+            calibrationStatus.setText(getString(R.string.calibration_noise_complete,
+                    dbfs, Math.round(recommended * 100)));
+            calibrationMode = CalibrationMode.IDLE;
+            inputEngine.stop(AudioInputEngine.StopReason.USER);
+            return;
+        }
+
+        boolean ready = output.state == MetronomeEngine.State.PLAYING
+                && input.state == AudioInputEngine.State.CAPTURING && !input.settling
+                && output.clock != null && output.clock.quality != MonotonicClockMapper.Quality.NONE;
+        if (output.state == MetronomeEngine.State.ERROR || input.state == AudioInputEngine.State.ERROR) {
+            failCalibration(R.string.calibration_latency_failed);
+            return;
+        }
+        if (!ready) {
+            calibrationStatus.setText(R.string.calibration_latency_waiting);
+            if (now - calibrationStartedNanos > ACOUSTIC_TIMEOUT_NANOS) {
+                engine.stop(MetronomeEngine.StopReason.USER);
+                inputEngine.stop(AudioInputEngine.StopReason.USER);
+                failCalibration(R.string.calibration_latency_failed);
+            }
+            return;
+        }
+        AudioManager manager = (AudioManager) getSystemService(AUDIO_SERVICE);
+        calibrationRoute = AudioRouteInfo.resolve(manager, input.routeId, output.routeId,
+                input.sampleRate, output.sampleRate, input.source);
+        if (calibrationRoute.bluetooth) {
+            engine.stop(MetronomeEngine.StopReason.USER);
+            inputEngine.stop(AudioInputEngine.StopReason.USER);
+            failCalibration(R.string.calibration_bluetooth);
+            return;
+        }
+        if (measurementStartedNanos == 0) measurementStartedNanos = now;
+        if (input.lastBeat != null && input.detections != lastCalibrationDetection) {
+            lastCalibrationDetection = input.detections;
+            long intervalFrames = output.sampleRate / 2L; // Fixed 120 BPM calibration pulse.
+            long firstTime = output.clock.toNanos(output.firstClickFrame);
+            long elapsed = input.lastBeat.timestampNanos - firstTime;
+            if (elapsed >= 0) {
+                long click = Math.max(0, elapsed / 500_000_000L);
+                long expectedFrame = output.firstClickFrame + click * intervalFrames;
+                latencyCalibration.add(output.clock.toNanos(expectedFrame), input.lastBeat.timestampNanos);
+            }
+        }
+        calibrationStatus.setText(getString(R.string.calibration_latency_measuring,
+                latencyCalibration.sampleCount(), LatencyCalibration.TARGET_SAMPLES));
+        boolean timedOut = now - measurementStartedNanos > ACOUSTIC_TIMEOUT_NANOS;
+        if (!latencyCalibration.hasTargetSamples() && !timedOut) return;
+        engine.stop(MetronomeEngine.StopReason.USER);
+        inputEngine.stop(AudioInputEngine.StopReason.USER);
+        if (!latencyCalibration.canFinish()) {
+            failCalibration(R.string.calibration_latency_failed);
+            return;
+        }
+        try {
+            LatencyCalibration.Result result = latencyCalibration.result();
+            boolean hardwareInput = input.clockQuality == MonotonicClockMapper.Quality.HARDWARE;
+            boolean hardwareOutput = output.clock.quality == MonotonicClockMapper.Quality.HARDWARE;
+            CalibrationProfile.Confidence confidence = result.confidence(hardwareInput,
+                    hardwareOutput, calibrationRoute.bluetooth);
+            double noiseDbfs = 20 * Math.log10(Math.max(1e-6, input.noiseRms));
+            calibrationProfile = new CalibrationProfile(calibrationRoute.key, calibrationRoute.label,
+                    System.currentTimeMillis(), result.delayMs, manualAdjustmentMs, noiseDbfs,
+                    sensitivity.getProgress() / 100f, result.acceptedSamples, result.dispersionMs,
+                    confidence, hardwareInput, hardwareOutput);
+            calibrationRepository.save(calibrationProfile);
+            showCalibrationProfile(calibrationProfile);
+            calibrationStatus.setText(getString(R.string.calibration_latency_complete,
+                    result.delayMs, result.dispersionMs, confidenceLabel(confidence)));
+            calibrationMode = CalibrationMode.IDLE;
+            latencyCalibration = null;
+        } catch (IllegalStateException unstable) {
+            failCalibration(R.string.calibration_latency_failed);
+        }
+    }
+
+    private void showCalibrationProfile(CalibrationProfile profile) {
+        if (profile.confidence == CalibrationProfile.Confidence.UNAVAILABLE) {
+            calibrationProfileView.setText(getString(R.string.calibration_noise_profile_format,
+                    profile.routeLabel, profile.noiseDbfs, Math.round(profile.sensitivity * 100)));
+        } else {
+            calibrationProfileView.setText(getString(R.string.calibration_profile_format,
+                    profile.routeLabel, profile.acousticDelayMs, profile.manualAdjustmentMs,
+                    profile.dispersionMs, profile.acceptedSamples, confidenceLabel(profile.confidence)));
+        }
+    }
+
+    private void loadProfileForActiveRoute(MetronomeEngine.Snapshot output,
+                                           AudioInputEngine.Snapshot input) {
+        if (calibrationMode != CalibrationMode.IDLE || input.routeId < 0 || output.routeId < 0
+                || input.sampleRate <= 0 || output.sampleRate <= 0) return;
+        AudioManager manager = (AudioManager) getSystemService(AUDIO_SERVICE);
+        AudioRouteInfo route = AudioRouteInfo.resolve(manager, input.routeId, output.routeId,
+                input.sampleRate, output.sampleRate, input.source);
+        if (route.key.equals(loadedRouteKey)) return;
+        loadedRouteKey = route.key;
+        calibrationRoute = route;
+        calibrationProfile = calibrationRepository.load(route.key);
+        if (calibrationProfile == null) {
+            calibrationProfileView.setText(R.string.calibration_no_profile);
+            manualAdjustmentMs = 0;
+        } else {
+            manualAdjustmentMs = calibrationProfile.manualAdjustmentMs;
+            showCalibrationProfile(calibrationProfile);
+        }
+        manualOffset.setProgress((int) Math.round(manualAdjustmentMs) + 150);
+        updateManualAdjustment(false);
+    }
+
+    private String confidenceLabel(CalibrationProfile.Confidence confidence) {
+        switch (confidence) {
+            case HIGH: return getString(R.string.calibration_confidence_high);
+            case MEDIUM: return getString(R.string.calibration_confidence_medium);
+            case LOW: return getString(R.string.calibration_confidence_low);
+            default: return getString(R.string.calibration_confidence_unavailable);
+        }
+    }
+
     private void updateProbe(MetronomeEngine.Snapshot output, AudioInputEngine.Snapshot input) {
         boolean ready = output.state == MetronomeEngine.State.PLAYING
                 && input.state == AudioInputEngine.State.CAPTURING;
@@ -613,6 +900,7 @@ public final class MetronomeActivity extends AppCompatActivity {
     }
 
     @Override protected void onPause() {
+        cancelCalibration(false);
         probePending = false;
         probe.cancel();
         polling = false;
@@ -638,6 +926,7 @@ public final class MetronomeActivity extends AppCompatActivity {
         out.putBoolean("permissionAsked", permissionAsked);
         out.putInt("volume", volume.getProgress());
         out.putInt("sensitivity", sensitivity.getProgress());
+        out.putDouble("manualAdjustmentMs", manualAdjustmentMs);
         out.putBoolean("settingsVisible", settingsPanel.getVisibility() == View.VISIBLE);
         super.onSaveInstanceState(out);
     }

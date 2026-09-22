@@ -1,4 +1,4 @@
-# Roteiro em aparelho — etapas 1 a 5
+# Roteiro em aparelho — etapas 1 a 6
 
 Este roteiro fecha o **ponto de decisão após a etapa 5**: confirmar, em celular real, se
 reprodução, captura, timestamps e detector sustentam a avaliação nas rotas recomendadas.
@@ -107,6 +107,22 @@ interferência e diagnóstico) ficam todos nesse painel.
     anunciado ao abrir.
 29. Nesta versão o app usa apenas o tema escuro; registrar se isso atrapalha o uso.
 
+## I. Calibração por rota
+
+30. Em silêncio, executar **Calibrar ruído e sensibilidade** três vezes. Registrar ruído em
+    dBFS e sensibilidade sugerida; resultados consecutivos devem ser coerentes e nunca gerar
+    offset temporal.
+31. No alto-falante, executar **Medir caminho acústico** sem bater. Registrar atraso,
+    dispersão, amostras e confiança. Repetir três vezes e comparar a mediana entre ensaios.
+32. Repetir após trocar para fone com fio e USB. O perfil exibido deve mudar com a rota e
+    reaparecer ao voltar à configuração anterior.
+33. Tentar a medição com Bluetooth: o app deve recusar a calibração de precisão com mensagem,
+    sem salvar um valor enganoso.
+34. Alterar o ajuste manual para +20 ms e −20 ms, fechar e reabrir o app, iniciar na mesma
+    rota e conferir persistência. Validar a convenção `captura − atraso + ajuste manual`.
+35. Trocar rota durante a medição, sair para Home e revogar o microfone: o ensaio deve parar
+    e nenhum resultado parcial deve substituir o perfil anterior.
+
 ## Ponto de decisão
 
 Para cada rota, concluir **sustenta**, **sustenta com restrição** ou **não sustenta** a
@@ -119,12 +135,12 @@ avaliação. Critérios provisórios; as tolerâncias de acerto só serão fixad
 - Detector sem duplicatas e sem falsos positivos em silêncio, com as perdas registradas (D).
 - Jitter e deriva medidos externamente e registrados (F).
 
-Se nenhuma rota sustentar a avaliação, corrigir ou restringir a rota antes da etapa 6.
+Se nenhuma rota sustentar a avaliação, corrigir ou restringir a rota antes da etapa 7.
 
 ## Testes automatizados disponíveis
 
 - `:core:test`: agenda, renderização PCM, escrita parcial, medidor de nível, detector,
-  ensaio de interferência e mapeamento de relógio (45 testes).
+  ensaio de interferência, mapeamento de relógio e calibração (49 testes).
 - `connectedDebugAndroidTest`: abertura e recriação, BPM inválido, declaração de
   `RECORD_AUDIO` sem pedido na abertura, padrão de 6/8 e preservação de compasso,
-  subdivisão e acentos na recriação (6 testes). Eles não substituem os ensaios acima.
+  subdivisão, acentos e controles de calibração (7 testes). Eles não substituem os ensaios acima.

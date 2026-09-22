@@ -44,6 +44,7 @@ public final class MetronomeEngine {
         public final String error;
         public final MonotonicClockMapper.Snapshot clock;
         public final long firstClickFrame;
+        public final int routeId;
 
         private Snapshot(Run run) {
             state = run.state;
@@ -59,6 +60,7 @@ public final class MetronomeEngine {
             error = run.error;
             clock = run.clock == null ? null : run.clock.snapshot();
             firstClickFrame = run.firstClickFrame;
+            routeId = run.routeId;
         }
 
         public boolean isBusy() {

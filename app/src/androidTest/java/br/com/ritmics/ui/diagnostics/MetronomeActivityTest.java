@@ -69,6 +69,18 @@ public final class MetronomeActivityTest {
         }
     }
 
+    @Test public void calibrationControlsAreIdleAndManualAdjustmentStartsAtZero() {
+        try (ActivityScenario<MetronomeActivity> scenario = ActivityScenario.launch(MetronomeActivity.class)) {
+            scenario.onActivity(activity -> {
+                android.widget.SeekBar manual = activity.findViewById(R.id.manual_offset);
+                assertEquals(150, manual.getProgress());
+                assertTrue(activity.findViewById(R.id.calibration_noise).isEnabled());
+                assertTrue(activity.findViewById(R.id.calibration_latency).isEnabled());
+                assertFalse(activity.findViewById(R.id.stop).isShown());
+            });
+        }
+    }
+
     @Test public void compoundMeterShowsSixBeatsWithBothGroupsAccented() {
         try (ActivityScenario<MetronomeActivity> scenario = ActivityScenario.launch(MetronomeActivity.class)) {
             scenario.onActivity(activity -> {

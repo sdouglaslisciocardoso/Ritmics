@@ -1,4 +1,4 @@
-# Arquitetura — etapa 5
+# Arquitetura — etapa 6
 
 ## Componentes implementados
 
@@ -15,6 +15,10 @@
 | `BeatDetector` | Pré-processamento PCM, piso de ruído, transientes e supressão de duplicatas | Worker de captura |
 | `InterferenceProbe` | Ensaio de silêncio/clique/cauda e contagem de candidatos contaminantes | Domínio; UI apenas conduz fases |
 | `MonotonicClockMapper` | Mapeia frames para `System.nanoTime`, ajusta taxa e rejeita timestamps inválidos | Worker de áudio |
+| `LatencyCalibration` | Mediana, MAD, rejeição de outliers e confiança do ensaio acústico | Java puro; thread principal fora do caminho crítico |
+| `CalibrationProfile` | Contrato imutável da compensação e convenção de sinal | Java puro |
+| `AudioRouteInfo` | Identidade de entrada/saída, taxa, fonte e restrição Bluetooth | Thread principal |
+| `CalibrationRepository` | Perfis locais por rota em `SharedPreferences` | Thread principal |
 | `MetronomeActivity` | Controles XML e diagnóstico | Thread principal |
 
 Fluxo de saída: controles → configuração/comandos → renderizador → frames PCM → AudioTrack.
@@ -74,13 +78,28 @@ a reprodução. Ganho posterior de foco nunca inicia áudio. Um underrun observa
 após o início encerra o fluxo com mensagem; o app não tenta manter uma avaliação
 inexistente nem esconde o problema deslocando os cliques.
 
+## Calibração
+
+A calibração de ruído captura três segundos após o detector estabilizar, calcula o piso
+médio e sugere sensibilidade conservadora. Ela não produz offset temporal.
+
+O ensaio acústico usa 120 BPM, saída audível e o microfone no mesmo aparelho. Cada onset é
+comparado ao frame esperado do clique mapeado ao relógio monotônico. O estimador exige ao
+menos oito amostras, usa mediana e MAD e rejeita duplicatas, atrasos fora de 3–400 ms e
+outliers. O resultado mede o caminho completo; não é rotulado como latência pura de hardware.
+Bluetooth é recusado para calibração de precisão.
+
+Perfis incluem rota, taxas, fonte, atraso acústico, dispersão, qualidade dos timestamps,
+ruído, sensibilidade e ajuste manual. A convenção é `corrigido = captura − atraso acústico
++ ajuste manual`. A etapa 7 será a primeira a aplicar esse valor, uma única vez.
+
 ## Fronteira da entrega
 
 O detector é deliberadamente candidato: fala, TV, música, batidas de mesa e o próprio
 clique podem gerar eventos. O ensaio de interferência não cancela eco e não prova
 ausência de falsos positivos; ele apenas revela contaminação provável na rota atual.
-Não há ainda associação às notas, calibração acústica, avaliação ou estatísticas de
-treino. A próxima etapa deve medir o caminho físico e definir o contrato de compensação.
+Não há ainda associação às notas, avaliação ou estatísticas de treino. O ensaio precisa
+ser validado em celulares e rotas reais antes de definir tolerâncias da etapa 7.
 
 Documentação oficial consultada:
 

@@ -39,10 +39,21 @@ que os 62,5 ms entre eventos na configuração mais rápida (240 BPM, quatro not
 
 ## O que ainda não é medido
 
-- Instante acústico de apresentação.
-- Latência de saída e de captura no caminho físico (alto-falante, fone, microfone).
+- Instante acústico de apresentação isolado da captura.
+- Latências individuais de saída, propagação e captura. A etapa 6 mede apenas o total
+  observado entre clique esperado e onset capturado.
 - Drift entre hardware e relógio monotônico validado em aparelho: o diagnóstico só estima
   a taxa a partir dos timestamps disponíveis.
 - Erro de uma batida do usuário.
 
 Handler de UI, FPS e instante de conclusão de `write()` não são referências musicais.
+
+## Convenção da calibração
+
+O perfil não altera os relógios nem o áudio. Para a avaliação futura:
+
+`instante corrigido = instante capturado − atraso acústico + ajuste manual`
+
+O atraso acústico vem do ensaio controlado. O ajuste manual fica limitado a ±150 ms e é
+explicitamente uma preferência; valor positivo move a batida julgada para mais tarde. A
+compensação será aplicada uma única vez pelo `TimingAnalyzer` da etapa 7.
