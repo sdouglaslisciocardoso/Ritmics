@@ -6,23 +6,27 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
-import android.content.res.Configuration;
 import android.media.AudioManager;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
+import android.view.LayoutInflater;
 import android.view.View;
 import android.view.WindowManager;
 import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
+import android.widget.LinearLayout;
 import android.widget.ProgressBar;
+import android.widget.RadioGroup;
 import android.widget.SeekBar;
-import android.widget.Spinner;
 import android.widget.TextView;
 
+import androidx.activity.OnBackPressedCallback;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.SwitchCompat;
@@ -42,18 +46,26 @@ import br.com.ritmics.core.audio.InterferenceProbe;
 import br.com.ritmics.core.time.MonotonicClockMapper;
 import java.util.Locale;
 
-/** Diagnostic screen only. The full training/session UI belongs to later stages. */
+/**
+ * Training setup screen. Technical controls (volume, microphone, diagnostics) live in the
+ * settings panel of the same Activity so the audio session survives opening it.
+ */
 public final class MetronomeActivity extends AppCompatActivity {
     private static final int REQUEST_RECORD_AUDIO = 1001;
+    private static final int[] METER_IDS = {R.id.meter_2_4, R.id.meter_3_4, R.id.meter_4_4, R.id.meter_6_8};
+    private static final int[] METER_BEATS = {2, 3, 4, 6};
+    private static final int[] SUBDIVISION_IDS = {R.id.subdivision_1, R.id.subdivision_2,
+            R.id.subdivision_3, R.id.subdivision_4};
     private final Handler uiHandler = new Handler(Looper.getMainLooper());
     private MetronomeEngine engine;
     private AudioInputEngine inputEngine;
     private EditText bpmInput;
     private SeekBar bpmSlider;
     private SeekBar volume;
-    private Spinner meter;
-    private SwitchCompat accent;
-    private SwitchCompat subdivision;
+    private RadioGroup meterGroup;
+    private RadioGroup subdivisionGroup;
+    private LinearLayout accentRow;
+    private CheckBox[] beatToggles = new CheckBox[0];
     private SwitchCompat mute;
     private SwitchCompat useMicrophone;
     private Button start;
@@ -64,8 +76,13 @@ public final class MetronomeActivity extends AppCompatActivity {
     private TextView diagnostics;
     private TextView pending;
     private TextView volumeLabel;
+    private TextView meterCaption, subdivisionCaption, accentHint;
+    private View mainScreen, settingsPanel, livePanel;
     private ProgressBar microphoneLevel;
     private int bpm = 80;
+    private int beatsPerBar = 4;
+    private int subdivisions = 1;
+    private boolean[] accents = MetronomeConfig.defaultAccents(4);
     private boolean polling;
     private boolean permissionAsked;
     private boolean sessionWithInput, probePending;
@@ -73,6 +90,10 @@ public final class MetronomeActivity extends AppCompatActivity {
     private TextView sensitivityLabel, detectorStatus, probeStatus;
     private Button probeStart;
     private final InterferenceProbe probe = new InterferenceProbe();
+
+    private final OnBackPressedCallback closeSettingsOnBack = new OnBackPressedCallback(false) {
+        @Override public void handleOnBackPressed() { showSettings(false); }
+    };
 
     // UI polling only reads diagnostics; it never triggers a musical event.
     private final Runnable refresh = new Runnable() {
@@ -103,9 +124,12 @@ public final class MetronomeActivity extends AppCompatActivity {
         bpmInput = findViewById(R.id.bpm_input);
         bpmSlider = findViewById(R.id.bpm_slider);
         volume = findViewById(R.id.volume);
-        meter = findViewById(R.id.meter);
-        accent = findViewById(R.id.accent);
-        subdivision = findViewById(R.id.subdivision);
+        meterGroup = findViewById(R.id.meter_group);
+        subdivisionGroup = findViewById(R.id.subdivision_group);
+        accentRow = findViewById(R.id.accent_row);
+        meterCaption = findViewById(R.id.meter_caption);
+        subdivisionCaption = findViewById(R.id.subdivision_caption);
+        accentHint = findViewById(R.id.accent_hint);
         mute = findViewById(R.id.mute);
         useMicrophone = findViewById(R.id.use_microphone);
         start = findViewById(R.id.start);
@@ -122,12 +146,16 @@ public final class MetronomeActivity extends AppCompatActivity {
         detectorStatus = findViewById(R.id.detector_status);
         probeStatus = findViewById(R.id.probe_status);
         probeStart = findViewById(R.id.probe_start);
+        mainScreen = findViewById(R.id.main_screen);
+        settingsPanel = findViewById(R.id.settings_panel);
+        livePanel = findViewById(R.id.live_panel);
+        // Screen readers announce the panel when it opens instead of having focus forced onto it.
+        ViewCompat.setAccessibilityPaneTitle(settingsPanel, getString(R.string.settings_title));
+        configureModes();
 
         if (savedState != null) bpm = Math.max(30, Math.min(240, savedState.getInt("bpm", 80)));
         setBpm(bpm);
-        meter.setSelection(savedState == null ? 2 : savedState.getInt("meter", 2));
-        accent.setChecked(savedState == null || savedState.getBoolean("accent", true));
-        subdivision.setChecked(savedState != null && savedState.getBoolean("subdivision"));
+        restoreStructure(savedState);
         mute.setChecked(savedState == null || savedState.getBoolean("mute", true));
         useMicrophone.setChecked(savedState != null && savedState.getBoolean("useMicrophone"));
         permissionAsked = savedState != null && savedState.getBoolean("permissionAsked");
@@ -143,13 +171,16 @@ public final class MetronomeActivity extends AppCompatActivity {
 
         findViewById(R.id.decrease).setOnClickListener(view -> adjustBpm(-1));
         findViewById(R.id.increase).setOnClickListener(view -> adjustBpm(1));
-        findViewById(R.id.apply_bpm).setOnClickListener(view -> applyTypedBpm());
         bpmInput.setOnEditorActionListener((view, action, event) -> {
             if (action == EditorInfo.IME_ACTION_DONE) {
-                applyTypedBpm();
+                if (applyTypedBpm()) finishBpmEditing();
                 return true;
             }
             return false;
+        });
+        bpmInput.setOnFocusChangeListener((view, focused) -> {
+            // Leaving the field never keeps an invalid value on screen.
+            if (!focused && !applyTypedBpm()) setBpm(bpm);
         });
         bpmSlider.setOnSeekBarChangeListener(new SimpleSeekListener() {
             @Override public void onProgressChanged(SeekBar bar, int progress, boolean fromUser) {
@@ -183,7 +214,95 @@ public final class MetronomeActivity extends AppCompatActivity {
             startActivity(intent);
         });
         useMicrophone.setOnCheckedChangeListener((button, checked) -> refreshState());
+        findViewById(R.id.open_settings).setOnClickListener(view -> showSettings(true));
+        findViewById(R.id.close_settings).setOnClickListener(view -> showSettings(false));
+        getOnBackPressedDispatcher().addCallback(this, closeSettingsOnBack);
+        showSettings(savedState != null && savedState.getBoolean("settingsVisible"));
         refreshState();
+    }
+
+    /** Only the live mode exists in this stage; the recorded mode is shown as upcoming. */
+    private void configureModes() {
+        View live = findViewById(R.id.mode_live);
+        live.setSelected(true);
+        ViewCompat.setStateDescription(live, getString(R.string.mode_selected));
+        ViewCompat.setStateDescription(findViewById(R.id.mode_recorded), getString(R.string.mode_unavailable));
+    }
+
+    private void restoreStructure(Bundle savedState) {
+        if (savedState != null) {
+            int savedBeats = savedState.getInt("beatsPerBar", 4);
+            beatsPerBar = MetronomeConfig.isSupportedMeter(savedBeats) ? savedBeats : 4;
+            subdivisions = Math.max(1, Math.min(MetronomeConfig.MAX_SUBDIVISIONS,
+                    savedState.getInt("subdivisions", 1)));
+            boolean[] saved = savedState.getBooleanArray("accents");
+            accents = saved != null && saved.length == beatsPerBar
+                    ? saved : MetronomeConfig.defaultAccents(beatsPerBar);
+        }
+        for (int i = 0; i < METER_BEATS.length; i++) {
+            if (METER_BEATS[i] == beatsPerBar) meterGroup.check(METER_IDS[i]);
+        }
+        subdivisionGroup.check(SUBDIVISION_IDS[subdivisions - 1]);
+        buildAccentRow();
+        updateCaptions();
+        meterGroup.setOnCheckedChangeListener((group, checkedId) -> {
+            for (int i = 0; i < METER_IDS.length; i++) {
+                if (METER_IDS[i] != checkedId || METER_BEATS[i] == beatsPerBar) continue;
+                beatsPerBar = METER_BEATS[i];
+                accents = MetronomeConfig.defaultAccents(beatsPerBar);
+                buildAccentRow();
+                updateCaptions();
+            }
+        });
+        subdivisionGroup.setOnCheckedChangeListener((group, checkedId) -> {
+            for (int i = 0; i < SUBDIVISION_IDS.length; i++) {
+                if (SUBDIVISION_IDS[i] == checkedId) subdivisions = i + 1;
+            }
+            updateCaptions();
+        });
+    }
+
+    private void buildAccentRow() {
+        accentRow.removeAllViews();
+        beatToggles = new CheckBox[beatsPerBar];
+        // Six beats must still fit a 360 dp wide phone without horizontal scrolling.
+        int gap = Math.round(getResources().getDisplayMetrics().density * (beatsPerBar > 4 ? 4 : 12));
+        LayoutInflater inflater = LayoutInflater.from(this);
+        for (int beat = 0; beat < beatsPerBar; beat++) {
+            View item = inflater.inflate(R.layout.item_beat, accentRow, false);
+            if (beat > 0) ((LinearLayout.LayoutParams) item.getLayoutParams()).setMarginStart(gap);
+            CheckBox toggle = item.findViewById(R.id.beat_toggle);
+            TextView mark = item.findViewById(R.id.accent_mark);
+            // Every item reuses the same ids; the Activity bundle owns the accent state.
+            toggle.setSaveEnabled(false);
+            toggle.setText(String.format(Locale.getDefault(), "%d", beat + 1));
+            toggle.setContentDescription(getString(R.string.beat_description, beat + 1));
+            toggle.setChecked(accents[beat]);
+            mark.setVisibility(accents[beat] ? View.VISIBLE : View.INVISIBLE);
+            final int index = beat;
+            toggle.setOnCheckedChangeListener((button, checked) -> {
+                accents[index] = checked;
+                mark.setVisibility(checked ? View.VISIBLE : View.INVISIBLE);
+            });
+            beatToggles[beat] = toggle;
+            accentRow.addView(item);
+        }
+    }
+
+    private void updateCaptions() {
+        boolean eighthPulse = MetronomeConfig.beatUnit(beatsPerBar) == 8;
+        meterCaption.setText(getString(eighthPulse ? R.string.meter_caption_eighth
+                : R.string.meter_caption_quarter, beatsPerBar));
+        String[] captions = getResources().getStringArray(eighthPulse
+                ? R.array.subdivision_captions_eighth : R.array.subdivision_captions_quarter);
+        subdivisionCaption.setText(captions[subdivisions - 1]);
+    }
+
+    private void showSettings(boolean visible) {
+        settingsPanel.setVisibility(visible ? View.VISIBLE : View.GONE);
+        mainScreen.setImportantForAccessibility(visible
+                ? View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS : View.IMPORTANT_FOR_ACCESSIBILITY_AUTO);
+        closeSettingsOnBack.setEnabled(visible);
     }
 
     private void updateSensitivity() {
@@ -226,8 +345,7 @@ public final class MetronomeActivity extends AppCompatActivity {
     private void startSession() {
         if (!polling || engine.snapshot().isBusy() || inputEngine.isBusy()) return;
         sessionWithInput = useMicrophone.isChecked();
-        MetronomeConfig config = new MetronomeConfig(bpm, meter.getSelectedItemPosition() + 2,
-                subdivision.isChecked() ? 2 : 1, accent.isChecked());
+        MetronomeConfig config = new MetronomeConfig(bpm, beatsPerBar, subdivisions, accents);
         if (useMicrophone.isChecked() && !inputEngine.start()) {
             microphoneStatus.setText(R.string.microphone_error);
             return;
@@ -271,11 +389,10 @@ public final class MetronomeActivity extends AppCompatActivity {
             view.setPadding(bars.left, bars.top, bars.right, bars.bottom);
             return windowInsets;
         });
-        boolean dark = (getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK)
-                == Configuration.UI_MODE_NIGHT_YES;
+        // The design is dark-only, so system bar icons are always light.
         WindowInsetsControllerCompat controller = WindowCompat.getInsetsController(getWindow(), root);
-        controller.setAppearanceLightStatusBars(!dark);
-        controller.setAppearanceLightNavigationBars(!dark);
+        controller.setAppearanceLightStatusBars(false);
+        controller.setAppearanceLightNavigationBars(false);
     }
 
     private boolean applyTypedBpm() {
@@ -288,6 +405,12 @@ public final class MetronomeActivity extends AppCompatActivity {
             bpmInput.setError(getString(R.string.bpm_error));
             return false;
         }
+    }
+
+    private void finishBpmEditing() {
+        InputMethodManager keyboard = getSystemService(InputMethodManager.class);
+        if (keyboard != null) keyboard.hideSoftInputFromWindow(bpmInput.getWindowToken(), 0);
+        bpmInput.clearFocus();
     }
 
     private void adjustBpm(int change) {
@@ -309,6 +432,19 @@ public final class MetronomeActivity extends AppCompatActivity {
         engine.setVolume(volume.getProgress() / 100f);
     }
 
+    private static void setTextIfChanged(TextView view, CharSequence text) {
+        if (!text.toString().contentEquals(view.getText())) view.setText(text);
+    }
+
+    private static void setVisible(View view, boolean visible) {
+        int visibility = visible ? View.VISIBLE : View.GONE;
+        if (view.getVisibility() != visibility) view.setVisibility(visibility);
+    }
+
+    private static void setChildrenEnabled(RadioGroup group, boolean enabled) {
+        for (int i = 0; i < group.getChildCount(); i++) group.getChildAt(i).setEnabled(enabled);
+    }
+
     private void refreshState() {
         MetronomeEngine.Snapshot state = engine.snapshot();
         AudioInputEngine.Snapshot input = inputEngine.snapshot();
@@ -323,14 +459,19 @@ public final class MetronomeActivity extends AppCompatActivity {
                 && state.isBusy()) engine.stop(MetronomeEngine.StopReason.FAILURE);
         updateProbe(state, input);
         boolean busy = state.isBusy() || input.isBusy();
-        start.setEnabled(!busy);
-        stop.setEnabled(state.state == MetronomeEngine.State.PLAYING
+        boolean stoppable = state.state == MetronomeEngine.State.PLAYING
                 || state.state == MetronomeEngine.State.STARTING
                 || input.state == AudioInputEngine.State.CAPTURING
-                || input.state == AudioInputEngine.State.STARTING);
-        meter.setEnabled(!busy);
-        accent.setEnabled(!busy);
-        subdivision.setEnabled(!busy);
+                || input.state == AudioInputEngine.State.STARTING;
+        start.setEnabled(!busy);
+        stop.setEnabled(stoppable);
+        // One primary action at a time, as in the design; stopping stays one tap away.
+        setVisible(start, !stoppable);
+        setVisible(stop, stoppable);
+        setChildrenEnabled(meterGroup, !busy);
+        setChildrenEnabled(subdivisionGroup, !busy);
+        for (CheckBox toggle : beatToggles) toggle.setEnabled(!busy);
+        setTextIfChanged(accentHint, getString(busy ? R.string.accent_locked : R.string.accent_hint));
         useMicrophone.setEnabled(!busy);
         boolean testing = probePending || probe.isRunning();
         probeStart.setEnabled(!busy && !testing);
@@ -339,7 +480,6 @@ public final class MetronomeActivity extends AppCompatActivity {
         sensitivity.setEnabled(!testing);
         bpmInput.setEnabled(!testing);
         bpmSlider.setEnabled(!testing);
-        findViewById(R.id.apply_bpm).setEnabled(!testing);
         findViewById(R.id.decrease).setEnabled(!testing);
         findViewById(R.id.increase).setEnabled(!testing);
         if (busy) getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
@@ -357,7 +497,9 @@ public final class MetronomeActivity extends AppCompatActivity {
                 else if (state.reason == MetronomeEngine.StopReason.ROUTE_CHANGED) message = getString(R.string.status_route);
                 else message = getString(state.reason == null ? R.string.status_ready : R.string.status_stopped);
         }
-        if (!message.contentEquals(status.getText())) status.setText(message);
+        setTextIfChanged(status, message);
+        // The design has no idle status line; it appears once there is something to report.
+        setVisible(status, state.state != MetronomeEngine.State.IDLE || state.reason != null);
         if (state.sampleRate > 0) {
             String outputText = getString(R.string.diagnostics_format, state.sampleRate, state.bufferFrames,
                     state.bufferFrames * 1000.0 / state.sampleRate,
@@ -376,9 +518,11 @@ public final class MetronomeActivity extends AppCompatActivity {
                     ppm(outputDrift), ppm(input.driftPpm - outputDrift));
             diagnostics.setText(outputText + "\n\n" + inputText + "\n" + timing);
         }
-        pending.setText(busy && state.bpm != state.requestedBpm
-                ? getString(R.string.bpm_pending, state.requestedBpm) : getString(R.string.tempo_live_hint));
+        boolean tempoPending = busy && state.bpm != state.requestedBpm;
+        if (tempoPending) setTextIfChanged(pending, getString(R.string.bpm_pending, state.requestedBpm));
+        setVisible(pending, tempoPending);
 
+        setVisible(livePanel, useMicrophone.isChecked());
         microphoneSettings.setVisibility(View.GONE);
         int levelPercent = Math.max(0, Math.min(100, Math.round(input.peak * 100f)));
         microphoneLevel.setProgress(levelPercent);
@@ -486,14 +630,15 @@ public final class MetronomeActivity extends AppCompatActivity {
 
     @Override protected void onSaveInstanceState(@NonNull Bundle out) {
         out.putInt("bpm", bpm);
-        out.putInt("meter", meter.getSelectedItemPosition());
-        out.putBoolean("accent", accent.isChecked());
-        out.putBoolean("subdivision", subdivision.isChecked());
+        out.putInt("beatsPerBar", beatsPerBar);
+        out.putInt("subdivisions", subdivisions);
+        out.putBooleanArray("accents", accents);
         out.putBoolean("mute", mute.isChecked());
         out.putBoolean("useMicrophone", useMicrophone.isChecked());
         out.putBoolean("permissionAsked", permissionAsked);
         out.putInt("volume", volume.getProgress());
         out.putInt("sensitivity", sensitivity.getProgress());
+        out.putBoolean("settingsVisible", settingsPanel.getVisibility() == View.VISIBLE);
         super.onSaveInstanceState(out);
     }
 

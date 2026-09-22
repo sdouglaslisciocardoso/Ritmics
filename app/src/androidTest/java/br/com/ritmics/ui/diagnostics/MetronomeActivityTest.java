@@ -3,7 +3,12 @@ package br.com.ritmics.ui.diagnostics;
 import android.Manifest;
 import android.content.Context;
 import android.content.pm.PackageManager;
+import android.view.inputmethod.EditorInfo;
+import android.widget.CheckBox;
 import android.widget.EditText;
+import android.widget.LinearLayout;
+import android.widget.RadioGroup;
+import android.widget.TextView;
 
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.core.app.ApplicationProvider;
@@ -22,7 +27,7 @@ public final class MetronomeActivityTest {
             scenario.onActivity(activity -> {
                 EditText input = activity.findViewById(R.id.bpm_input);
                 input.setText("137");
-                activity.findViewById(R.id.apply_bpm).performClick();
+                input.onEditorAction(EditorInfo.IME_ACTION_DONE);
             });
             scenario.recreate();
             scenario.onActivity(activity -> {
@@ -60,6 +65,44 @@ public final class MetronomeActivityTest {
                 assertTrue(((androidx.appcompat.widget.SwitchCompat) activity.findViewById(R.id.mute)).isChecked());
                 assertFalse(((androidx.appcompat.widget.SwitchCompat) activity.findViewById(R.id.use_microphone)).isChecked());
                 assertTrue(activity.findViewById(R.id.probe_start).isEnabled());
+            });
+        }
+    }
+
+    @Test public void compoundMeterShowsSixBeatsWithBothGroupsAccented() {
+        try (ActivityScenario<MetronomeActivity> scenario = ActivityScenario.launch(MetronomeActivity.class)) {
+            scenario.onActivity(activity -> {
+                ((RadioGroup) activity.findViewById(R.id.meter_group)).check(R.id.meter_6_8);
+                LinearLayout beats = activity.findViewById(R.id.accent_row);
+                assertEquals(6, beats.getChildCount());
+                for (int i = 0; i < 6; i++) {
+                    CheckBox beat = beats.getChildAt(i).findViewById(R.id.beat_toggle);
+                    assertEquals(i == 0 || i == 3, beat.isChecked());
+                }
+            });
+        }
+    }
+
+    @Test public void structureChoicesSurviveRecreation() {
+        try (ActivityScenario<MetronomeActivity> scenario = ActivityScenario.launch(MetronomeActivity.class)) {
+            scenario.onActivity(activity -> {
+                ((RadioGroup) activity.findViewById(R.id.meter_group)).check(R.id.meter_3_4);
+                ((RadioGroup) activity.findViewById(R.id.subdivision_group)).check(R.id.subdivision_3);
+                LinearLayout beats = activity.findViewById(R.id.accent_row);
+                ((CheckBox) beats.getChildAt(2).findViewById(R.id.beat_toggle)).setChecked(true);
+            });
+            scenario.recreate();
+            scenario.onActivity(activity -> {
+                assertEquals(R.id.meter_3_4, ((RadioGroup) activity.findViewById(R.id.meter_group)).getCheckedRadioButtonId());
+                assertEquals(R.id.subdivision_3,
+                        ((RadioGroup) activity.findViewById(R.id.subdivision_group)).getCheckedRadioButtonId());
+                LinearLayout beats = activity.findViewById(R.id.accent_row);
+                assertEquals(3, beats.getChildCount());
+                assertTrue(((CheckBox) beats.getChildAt(0).findViewById(R.id.beat_toggle)).isChecked());
+                assertFalse(((CheckBox) beats.getChildAt(1).findViewById(R.id.beat_toggle)).isChecked());
+                assertTrue(((CheckBox) beats.getChildAt(2).findViewById(R.id.beat_toggle)).isChecked());
+                assertTrue(((TextView) activity.findViewById(R.id.subdivision_caption)).getText()
+                        .toString().startsWith("Tercinas"));
             });
         }
     }

@@ -20,7 +20,7 @@ public final class BeatDetector {
             throw new IllegalArgumentException("sampleRate/listener");
         rate = sampleRate; this.listener = listener;
         window = Math.max(1, sampleRate / 1000);
-        refractory = sampleRate * 40 / 1000; // below 125 ms at 240 BPM with eighth notes.
+        refractory = sampleRate * 40 / 1000; // below 62.5 ms at 240 BPM with sixteenth notes.
         quietFrames = Math.max(1, sampleRate / 2000);
         history = new float[sampleRate * 12 / 1000];
         hpPole = Math.exp(-2 * Math.PI * 60 / sampleRate);

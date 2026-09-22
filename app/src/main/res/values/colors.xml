@@ -1,10 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="background">#F3F5F5</color>
-    <color name="surface">#FFFFFF</color>
-    <color name="ink">#142D32</color>
-    <color name="muted_ink">#52666B</color>
-    <color name="accent">#196955</color>
-    <color name="on_accent">#FFFFFF</color>
-    <color name="stroke">#D6DFDF</color>
+    <color name="background">#0B0D10</color>
+    <color name="surface">#15181D</color>
+    <color name="surface_raised">#1C2026</color>
+    <color name="stroke">#272C34</color>
+    <color name="stroke_strong">#3A414C</color>
+    <color name="ink">#F3F5F7</color>
+    <color name="muted_ink">#8D95A1</color>
+    <color name="accent">#C8F54E</color>
+    <color name="accent_pressed">#A8D637</color>
+    <color name="on_accent">#0B0D10</color>
+    <color name="accent_container">#1A2211</color>
+    <color name="accent_ring">#2C3A12</color>
 </resources>

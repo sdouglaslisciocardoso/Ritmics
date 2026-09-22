@@ -13,7 +13,7 @@ public final class ClickBank {
     short[] get(int kind) { return sounds[kind]; }
 
     private static short[] synthesize(int sampleRate, double frequency, double gain) {
-        int length = Math.max(2, sampleRate / 100); // 10 ms, well below the 125 ms minimum spacing.
+        int length = Math.max(2, sampleRate / 100); // 10 ms, well below the 62.5 ms minimum spacing.
         short[] pcm = new short[length];
         for (int i = 0; i < length; i++) {
             double time = (double) i / sampleRate;

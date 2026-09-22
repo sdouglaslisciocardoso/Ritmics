@@ -48,8 +48,8 @@ public final class BeatSchedule {
             segmentEvent = 0;
             bpm = requestedBpm;
         }
-        int kind = position == 0 && config.isAccentFirstBeat()
-                ? ACCENT : position % config.getSubdivisions() == 0 ? PULSE : SUBDIVISION;
+        int kind = position % config.getSubdivisions() != 0 ? SUBDIVISION
+                : config.isAccented((int) (position / config.getSubdivisions())) ? ACCENT : PULSE;
         totalEvents++;
         segmentEvent++;
         long numerator = 60L * sampleRate;

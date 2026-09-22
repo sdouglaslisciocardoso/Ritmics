@@ -9,7 +9,8 @@ Aplicativo Android nativo em **Java e XML**, com um metrônomo técnico funciona
 - Saída PCM contínua por `AudioTrack`, em uma thread de áudio dedicada.
 - Captura PCM mono por `AudioRecord`, em uma thread de captura dedicada.
 - Andamento inteiro de **30 a 240 BPM**, com entrada numérica, slider e botões.
-- Compassos **2/4, 3/4 e 4/4**, acento opcional e duas subdivisões por pulso.
+- Compassos **2/4, 3/4, 4/4 e 6/8** (em 6/8 o BPM conta colcheias), acento por tempo e
+  subdivisões de uma a quatro notas por tempo (semínimas, colcheias, tercinas, semicolcheias).
 - Iniciar/parar, volume e silêncio mantendo a fase musical.
 - Mudança de BPM no próximo início de compasso ainda não renderizado.
 - Interrupção ao sair da tela, perder foco ou mudar a rota; sem retomada automática.
@@ -26,8 +27,9 @@ Aplicativo Android nativo em **Java e XML**, com um metrônomo técnico funciona
 
 **Ainda não faz parte desta versão:** associação das detecções às notas, calibração acústica,
 avaliação musical, pista de notas, sessões com duração, histórico ou preferências permanentes.
-O manifesto não pede internet ou armazenamento. A tela continua sendo um painel técnico, não uma simulação
-dessas funções futuras.
+O manifesto não pede internet ou armazenamento. A tela segue o protótipo visual de treino (tema escuro);
+o modo **Gravado** aparece como “Em breve” e não simula funções futuras. Volume, microfone, sensibilidade,
+teste de interferência e diagnóstico ficam no painel de configurações (engrenagem).
 
 ## Abrir e compilar
 
@@ -47,6 +49,11 @@ Requisitos fixados:
 2. Configure o Gradle JDK para JDK 17 e instale a plataforma SDK 37 pelo SDK Manager.
 3. Deixe o Android Studio criar `local.properties` com `sdk.dir` do seu SDK.
 4. Aguarde a sincronização e execute a configuração `app` em um aparelho Android 8 ou superior.
+
+O projeto também foi validado com o JDK embutido do Android Studio (JBR 25). No Windows, se o
+caminho da pasta tiver acentos (por exemplo `Programação`), use um JDK 18 ou superior: o
+`-Dfile.encoding=COMPAT` do `gradle.properties` só é reconhecido a partir dele e evita que os
+testes do `core` falhem com `ClassNotFoundException`.
 
 A primeira compilação precisa de acesso aos repositórios Google Maven, Maven Central
 e à distribuição oficial do Gradle. O **aplicativo instalado funciona offline**.
@@ -98,16 +105,18 @@ requisitos versionados. Em outra máquina, configure seu próprio JDK/SDK.
 
 ## Utilização
 
-1. Escolha BPM, compasso e subdivisão.
-2. Ajuste um volume confortável e pressione **Iniciar**.
-3. Use **Aplicar BPM**, o slider ou os botões para mudar o andamento. Durante a
+1. Escolha BPM, compasso e subdivisão. Toque nos tempos da **Acentuação** para
+   acentuá-los; ao trocar de compasso os acentos voltam ao padrão (1, ou 1 e 4 em 6/8).
+2. Ajuste um volume confortável na engrenagem e pressione **Iniciar Treino**.
+3. Digite o BPM e confirme no teclado, ou use o slider ou os botões. Durante a
    reprodução a alteração fica pendente até um início de compasso disponível.
-4. Ative **Capturar pelo microfone** somente se quiser medir o sinal de entrada. A
+4. Na engrenagem, ative **Capturar pelo microfone** somente se quiser medir o sinal de
+   entrada; o feedback ao vivo aparece na tela principal. A
    permissão aparece ao iniciar, nunca na abertura do aplicativo. O áudio é processado
    em memória e descartado; ainda não há detecção ou avaliação.
 5. Silencie os cliques para manter a geração musical sem som. Isso ainda não é um
    exercício de treino visual.
-6. Pressione **Parar** antes de alterar compasso, acento ou subdivisão.
+6. Pressione **Parar Treino** antes de alterar compasso, acento ou subdivisão.
 6. Ao iniciar novamente, a contagem recomeça no primeiro tempo; não há retomada de
    uma sessão parcialmente tocada nesta etapa.
 
@@ -119,8 +128,8 @@ a etapa 10.
 
 `core` é Java puro: configuração musical, agenda racional em frames, síntese de
 cliques, renderização PCM, contrato de escrita parcial e medição de nível. `app`
-adapta isso ao Android e fornece a tela de diagnóstico. A UI apenas envia comandos
-e lê snapshots a cada 250 ms; esse callback **não dispara cliques nem lê o PCM**.
+adapta isso ao Android e fornece a tela de treino. A UI apenas envia comandos
+e lê snapshots a cada 100 ms; esse callback **não dispara cliques nem lê o PCM**.
 
 Detalhes: [arquitetura](docs/architecture.md), [contrato temporal](docs/timing-contract.md),
 [roteiro físico](docs/device-test-plan.md), [validação](docs/validation-results.md)
