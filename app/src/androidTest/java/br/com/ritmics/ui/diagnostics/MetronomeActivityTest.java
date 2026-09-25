@@ -3,6 +3,7 @@ package br.com.ritmics.ui.diagnostics;
 import android.Manifest;
 import android.content.Context;
 import android.content.pm.PackageManager;
+import android.os.SystemClock;
 import android.view.inputmethod.EditorInfo;
 import android.widget.CheckBox;
 import android.widget.EditText;
@@ -13,8 +14,13 @@ import android.widget.TextView;
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.core.app.ApplicationProvider;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
+import androidx.test.platform.app.InstrumentationRegistry;
+
+import java.lang.reflect.Field;
+import java.util.function.Predicate;
 
 import br.com.ritmics.R;
+import br.com.ritmics.audio.input.AudioInputEngine;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import static org.junit.Assert.*;
@@ -116,6 +122,49 @@ public final class MetronomeActivityTest {
                 assertTrue(((TextView) activity.findViewById(R.id.subdivision_caption)).getText()
                         .toString().startsWith("Tercinas"));
             });
+        }
+    }
+
+    @Test public void calibrationEndsAsSoonAsCaptureStopsMidway() throws InterruptedException {
+        grantMicrophone();
+        try (ActivityScenario<MetronomeActivity> scenario = ActivityScenario.launch(MetronomeActivity.class)) {
+            scenario.onActivity(activity -> activity.findViewById(R.id.calibration_latency).performClick());
+            waitFor(scenario, 5000,
+                    activity -> inputEngine(activity).snapshot().state == AudioInputEngine.State.CAPTURING);
+            // A device change stops only the capture, exactly as the engine's route listener does.
+            scenario.onActivity(activity -> inputEngine(activity).stop(AudioInputEngine.StopReason.ROUTE_CHANGED));
+            waitFor(scenario, 2000, activity -> activity.findViewById(R.id.calibration_latency).isEnabled());
+            scenario.onActivity(activity -> assertEquals(activity.getString(R.string.calibration_cancelled),
+                    ((TextView) activity.findViewById(R.id.calibration_status)).getText().toString()));
+        }
+    }
+
+    private static void grantMicrophone() {
+        InstrumentationRegistry.getInstrumentation().getUiAutomation().grantRuntimePermission(
+                ApplicationProvider.getApplicationContext().getPackageName(), Manifest.permission.RECORD_AUDIO);
+    }
+
+    /** Polls on the main thread; the Activity itself refreshes its state every 100 ms. */
+    private static void waitFor(ActivityScenario<MetronomeActivity> scenario, long timeoutMs,
+                                Predicate<MetronomeActivity> condition) throws InterruptedException {
+        long deadline = SystemClock.uptimeMillis() + timeoutMs;
+        boolean[] met = {false};
+        while (SystemClock.uptimeMillis() < deadline) {
+            scenario.onActivity(activity -> met[0] = condition.test(activity));
+            if (met[0]) return;
+            Thread.sleep(50);
+        }
+        fail("Condition not met within " + timeoutMs + " ms");
+    }
+
+    /** Route changes cannot be triggered from a test, so the private capture engine is reached directly. */
+    private static AudioInputEngine inputEngine(MetronomeActivity activity) {
+        try {
+            Field field = MetronomeActivity.class.getDeclaredField("inputEngine");
+            field.setAccessible(true);
+            return (AudioInputEngine) field.get(activity);
+        } catch (ReflectiveOperationException unreachable) {
+            throw new AssertionError(unreachable);
         }
     }
 }

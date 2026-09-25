@@ -44,6 +44,7 @@ import br.com.ritmics.audio.output.MetronomeEngine;
 import br.com.ritmics.calibration.AudioRouteInfo;
 import br.com.ritmics.calibration.CalibrationRepository;
 import br.com.ritmics.core.calibration.CalibrationProfile;
+import br.com.ritmics.core.calibration.CalibrationSupervisor;
 import br.com.ritmics.core.calibration.LatencyCalibration;
 import br.com.ritmics.core.music.MetronomeConfig;
 import br.com.ritmics.core.audio.InterferenceProbe;
@@ -395,7 +396,8 @@ public final class MetronomeActivity extends AppCompatActivity {
     private void beginNoiseCalibration() {
         noisePermissionPending = false;
         calibrationMode = CalibrationMode.NOISE;
-        calibrationStartedNanos = measurementStartedNanos = 0;
+        calibrationStartedNanos = System.nanoTime();
+        measurementStartedNanos = 0;
         noiseSum = 0; noiseSamples = 0;
         sessionWithInput = false;
         calibrationStatus.setText(R.string.calibration_noise_settling);
@@ -427,6 +429,29 @@ public final class MetronomeActivity extends AppCompatActivity {
         noisePermissionPending = acousticPermissionPending = false;
         latencyCalibration = null;
         if (userVisible) calibrationStatus.setText(R.string.calibration_cancelled);
+    }
+
+    private void stopCalibrationAudio() {
+        engine.stop(MetronomeEngine.StopReason.USER);
+        inputEngine.stop(AudioInputEngine.StopReason.USER);
+    }
+
+    private static CalibrationSupervisor.PathState pathOf(MetronomeEngine.State state) {
+        switch (state) {
+            case STARTING: return CalibrationSupervisor.PathState.STARTING;
+            case PLAYING: return CalibrationSupervisor.PathState.RUNNING;
+            case ERROR: return CalibrationSupervisor.PathState.FAILED;
+            default: return CalibrationSupervisor.PathState.STOPPED;
+        }
+    }
+
+    private static CalibrationSupervisor.PathState pathOf(AudioInputEngine.State state) {
+        switch (state) {
+            case STARTING: return CalibrationSupervisor.PathState.STARTING;
+            case CAPTURING: return CalibrationSupervisor.PathState.RUNNING;
+            case ERROR: return CalibrationSupervisor.PathState.FAILED;
+            default: return CalibrationSupervisor.PathState.STOPPED;
+        }
     }
 
     private void failCalibration(int message) {
@@ -703,15 +728,31 @@ public final class MetronomeActivity extends AppCompatActivity {
     private void updateCalibration(MetronomeEngine.Snapshot output, AudioInputEngine.Snapshot input) {
         if (calibrationMode == CalibrationMode.IDLE) return;
         long now = System.nanoTime();
-        if (calibrationMode == CalibrationMode.NOISE) {
-            if (input.state == AudioInputEngine.State.ERROR) {
+        boolean noise = calibrationMode == CalibrationMode.NOISE;
+        // The noise measurement only captures, so its absent output path never counts as stopped.
+        CalibrationSupervisor.PathState outputPath = noise
+                ? CalibrationSupervisor.PathState.RUNNING : pathOf(output.state);
+        boolean clocksReady = noise || (output.clock != null
+                && output.clock.quality != MonotonicClockMapper.Quality.NONE);
+        switch (CalibrationSupervisor.check(outputPath, pathOf(input.state), input.settling,
+                clocksReady, now - calibrationStartedNanos, ACOUSTIC_TIMEOUT_NANOS)) {
+            case INTERRUPTED:
+                stopCalibrationAudio();
+                failCalibration(R.string.calibration_cancelled);
+                return;
+            case FAILED:
+            case TIMED_OUT:
+                stopCalibrationAudio();
                 failCalibration(R.string.calibration_latency_failed);
                 return;
-            }
-            if (input.state != AudioInputEngine.State.CAPTURING || input.settling) {
-                calibrationStatus.setText(R.string.calibration_noise_settling);
+            case WAIT:
+                calibrationStatus.setText(noise ? R.string.calibration_noise_settling
+                        : R.string.calibration_latency_waiting);
                 return;
-            }
+            default:
+                break;
+        }
+        if (noise) {
             if (measurementStartedNanos == 0) measurementStartedNanos = now;
             calibrationStatus.setText(R.string.calibration_noise_measuring);
             noiseSum += input.noiseRms;
@@ -738,22 +779,6 @@ public final class MetronomeActivity extends AppCompatActivity {
             return;
         }
 
-        boolean ready = output.state == MetronomeEngine.State.PLAYING
-                && input.state == AudioInputEngine.State.CAPTURING && !input.settling
-                && output.clock != null && output.clock.quality != MonotonicClockMapper.Quality.NONE;
-        if (output.state == MetronomeEngine.State.ERROR || input.state == AudioInputEngine.State.ERROR) {
-            failCalibration(R.string.calibration_latency_failed);
-            return;
-        }
-        if (!ready) {
-            calibrationStatus.setText(R.string.calibration_latency_waiting);
-            if (now - calibrationStartedNanos > ACOUSTIC_TIMEOUT_NANOS) {
-                engine.stop(MetronomeEngine.StopReason.USER);
-                inputEngine.stop(AudioInputEngine.StopReason.USER);
-                failCalibration(R.string.calibration_latency_failed);
-            }
-            return;
-        }
         AudioManager manager = (AudioManager) getSystemService(AUDIO_SERVICE);
         calibrationRoute = AudioRouteInfo.resolve(manager, input.routeId, output.routeId,
                 input.sampleRate, output.sampleRate, input.source);
