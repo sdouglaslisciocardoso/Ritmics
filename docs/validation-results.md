@@ -16,6 +16,8 @@ Registro das execuções do [roteiro em aparelho](device-test-plan.md). Legenda:
 | 2026-09-22 | `connectedDebugAndroidTest` (6 testes) | Emulador Pixel 10 Pro XL, API 37 | ✅ |
 | 2026-09-22 | `:core:test` (49 testes), `assembleDebug`, `lintDebug` e APK de testes | Windows 11, JBR 25 | ✅ |
 | 2026-09-22 | `connectedDebugAndroidTest` da etapa 6 (7 testes) | Não executado: nenhum aparelho/emulador conectado nesta sessão | ⏳ |
+| 2026-09-25 | Correções da calibração: `:core:test` (57 testes), `lintDebug` | Windows 11, JBR 25 | ✅ |
+| 2026-09-25 | `connectedDebugAndroidTest` (11 testes, incluindo os da etapa 6), 2 execuções seguidas | Emulador Pixel 10 Pro XL, API 37 | ✅ |
 
 O emulador só valida a interface e o ciclo de vida. Os resultados de áudio abaixo
 precisam de celular real.
