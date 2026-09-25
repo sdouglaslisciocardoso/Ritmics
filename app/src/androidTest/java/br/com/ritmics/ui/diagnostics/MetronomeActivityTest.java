@@ -139,6 +139,46 @@ public final class MetronomeActivityTest {
         }
     }
 
+    @Test public void tempoAndLevelControlsAreLockedWhileCalibrating() throws InterruptedException {
+        grantMicrophone();
+        try (ActivityScenario<MetronomeActivity> scenario = ActivityScenario.launch(MetronomeActivity.class)) {
+            scenario.onActivity(activity -> activity.findViewById(R.id.calibration_latency).performClick());
+            waitFor(scenario, 5000,
+                    activity -> inputEngine(activity).snapshot().state == AudioInputEngine.State.CAPTURING);
+            scenario.onActivity(activity -> {
+                for (int id : new int[] {R.id.increase, R.id.decrease, R.id.bpm_slider, R.id.bpm_input,
+                        R.id.volume, R.id.mute, R.id.sensitivity, R.id.start}) {
+                    assertFalse(activity.getResources().getResourceEntryName(id) + " | status: "
+                            + ((TextView) activity.findViewById(R.id.calibration_status)).getText(),
+                            activity.findViewById(id).isEnabled());
+                }
+                assertTrue(activity.findViewById(R.id.stop).isEnabled());
+                activity.findViewById(R.id.stop).performClick();
+            });
+            waitFor(scenario, 2000, activity -> activity.findViewById(R.id.increase).isEnabled());
+        }
+    }
+
+    @Test public void tempoTypedDuringCalibrationDoesNotReachTheCalibrationPulse() throws InterruptedException {
+        grantMicrophone();
+        try (ActivityScenario<MetronomeActivity> scenario = ActivityScenario.launch(MetronomeActivity.class)) {
+            scenario.onActivity(activity -> activity.findViewById(R.id.calibration_latency).performClick());
+            waitFor(scenario, 5000,
+                    activity -> inputEngine(activity).snapshot().state == AudioInputEngine.State.CAPTURING);
+            // A field edited before the calibration can still commit its value when it loses focus.
+            scenario.onActivity(activity -> {
+                EditText input = activity.findViewById(R.id.bpm_input);
+                input.setText("81");
+                input.onEditorAction(EditorInfo.IME_ACTION_DONE);
+            });
+            Thread.sleep(500);
+            scenario.onActivity(activity -> {
+                assertFalse(activity.findViewById(R.id.pending_tempo).isShown());
+                activity.findViewById(R.id.stop).performClick();
+            });
+        }
+    }
+
     private static void grantMicrophone() {
         InstrumentationRegistry.getInstrumentation().getUiAutomation().grantRuntimePermission(
                 ApplicationProvider.getApplicationContext().getPackageName(), Manifest.permission.RECORD_AUDIO);

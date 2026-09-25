@@ -402,6 +402,7 @@ public final class MetronomeActivity extends AppCompatActivity {
         sessionWithInput = false;
         calibrationStatus.setText(R.string.calibration_noise_settling);
         if (!inputEngine.start()) failCalibration(R.string.calibration_latency_failed);
+        refreshState(); // Lock the controls now rather than on the next 100 ms poll.
     }
 
     private void beginAcousticCalibration() {
@@ -421,6 +422,7 @@ public final class MetronomeActivity extends AppCompatActivity {
             engine.stop(MetronomeEngine.StopReason.FAILURE);
             failCalibration(R.string.calibration_latency_failed);
         }
+        refreshState(); // Lock the controls now rather than on the next 100 ms poll.
     }
 
     private void cancelCalibration(boolean userVisible) {
@@ -580,7 +582,8 @@ public final class MetronomeActivity extends AppCompatActivity {
         bpmSlider.setProgress(value - MetronomeConfig.MIN_BPM);
         // Expose the real BPM, rather than the slider's 0..210 storage range, to accessibility.
         ViewCompat.setStateDescription(bpmSlider, value + " " + getString(R.string.bpm_unit));
-        engine.requestBpm(value);
+        // A running calibration owns the output pulse; the new tempo applies to the next session.
+        if (calibrationMode == CalibrationMode.IDLE) engine.requestBpm(value);
     }
 
     private void updateVolume() {
@@ -617,11 +620,12 @@ public final class MetronomeActivity extends AppCompatActivity {
         loadProfileForActiveRoute(state, input);
         updateProbe(state, input);
         boolean busy = state.isBusy() || input.isBusy();
-        boolean stoppable = state.state == MetronomeEngine.State.PLAYING
+        boolean calibrating = calibrationMode != CalibrationMode.IDLE;
+        boolean stoppable = calibrating || state.state == MetronomeEngine.State.PLAYING
                 || state.state == MetronomeEngine.State.STARTING
                 || input.state == AudioInputEngine.State.CAPTURING
                 || input.state == AudioInputEngine.State.STARTING;
-        start.setEnabled(!busy);
+        start.setEnabled(!busy && !calibrating);
         stop.setEnabled(stoppable);
         // One primary action at a time, as in the design; stopping stays one tap away.
         setVisible(start, !stoppable);
@@ -637,13 +641,15 @@ public final class MetronomeActivity extends AppCompatActivity {
         calibrateLatency.setEnabled(!busy && calibrationMode == CalibrationMode.IDLE);
         resetCalibration.setEnabled(!busy && calibrationMode == CalibrationMode.IDLE);
         manualOffset.setEnabled(!busy && calibrationMode == CalibrationMode.IDLE);
-        volume.setEnabled(!testing);
-        mute.setEnabled(!testing);
-        sensitivity.setEnabled(!testing);
-        bpmInput.setEnabled(!testing);
-        bpmSlider.setEnabled(!testing);
-        findViewById(R.id.decrease).setEnabled(!testing);
-        findViewById(R.id.increase).setEnabled(!testing);
+        // Both acoustic experiments assume a fixed pulse, level and detector sensitivity.
+        boolean locked = testing || calibrating;
+        volume.setEnabled(!locked);
+        mute.setEnabled(!locked);
+        sensitivity.setEnabled(!locked);
+        bpmInput.setEnabled(!locked);
+        bpmSlider.setEnabled(!locked);
+        findViewById(R.id.decrease).setEnabled(!locked);
+        findViewById(R.id.increase).setEnabled(!locked);
         if (busy) getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
