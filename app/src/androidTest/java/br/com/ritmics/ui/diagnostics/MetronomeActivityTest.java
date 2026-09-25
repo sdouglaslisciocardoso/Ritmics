@@ -179,6 +179,31 @@ public final class MetronomeActivityTest {
         }
     }
 
+    @Test public void noiseProfileIsStillLoadedWhenTrainingOnTheSameRoute() throws InterruptedException {
+        grantMicrophone();
+        try (ActivityScenario<MetronomeActivity> scenario = ActivityScenario.launch(MetronomeActivity.class)) {
+            scenario.onActivity(activity -> {
+                activity.findViewById(R.id.calibration_reset).performClick();
+                activity.findViewById(R.id.calibration_noise).performClick();
+            });
+            waitFor(scenario, 15000, activity -> activity.findViewById(R.id.calibration_noise).isEnabled());
+            scenario.onActivity(activity -> {
+                String status = ((TextView) activity.findViewById(R.id.calibration_status)).getText().toString();
+                assertNotEquals(activity.getString(R.string.calibration_latency_failed), status);
+                assertNotEquals(activity.getString(R.string.calibration_cancelled), status);
+                activity.findViewById(R.id.start).performClick();
+            });
+            waitFor(scenario, 5000,
+                    activity -> inputEngine(activity).snapshot().state == AudioInputEngine.State.CAPTURING);
+            Thread.sleep(300); // Several refresh polls, so the active route has been resolved.
+            scenario.onActivity(activity -> {
+                assertNotEquals(activity.getString(R.string.calibration_no_profile),
+                        ((TextView) activity.findViewById(R.id.calibration_profile)).getText().toString());
+                activity.findViewById(R.id.stop).performClick();
+            });
+        }
+    }
+
     private static void grantMicrophone() {
         InstrumentationRegistry.getInstrumentation().getUiAutomation().grantRuntimePermission(
                 ApplicationProvider.getApplicationContext().getPackageName(), Manifest.permission.RECORD_AUDIO);

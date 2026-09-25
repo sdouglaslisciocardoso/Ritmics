@@ -60,6 +60,9 @@ public final class MetronomeActivity extends AppCompatActivity {
     private static final long NOISE_MEASUREMENT_NANOS = 3_000_000_000L;
     private static final long ACOUSTIC_TIMEOUT_NANOS = 18_000_000_000L;
     private enum CalibrationMode { IDLE, NOISE, ACOUSTIC }
+    /** Both calibrations run this pulse; the acoustic estimator assumes its 500 ms period. */
+    private static final MetronomeConfig CALIBRATION_PULSE =
+            new MetronomeConfig(120, 4, 1, MetronomeConfig.defaultAccents(4));
     private static final int[] METER_IDS = {R.id.meter_2_4, R.id.meter_3_4, R.id.meter_4_4, R.id.meter_6_8};
     private static final int[] METER_BEATS = {2, 3, 4, 6};
     private static final int[] SUBDIVISION_IDS = {R.id.subdivision_1, R.id.subdivision_2,
@@ -399,9 +402,15 @@ public final class MetronomeActivity extends AppCompatActivity {
         calibrationStartedNanos = System.nanoTime();
         measurementStartedNanos = 0;
         noiseSum = 0; noiseSamples = 0;
-        sessionWithInput = false;
+        // A silent output run identifies the output route, so the noise profile is saved under
+        // the same key that is looked up later when training on this route.
+        sessionWithInput = true;
         calibrationStatus.setText(R.string.calibration_noise_settling);
-        if (!inputEngine.start()) failCalibration(R.string.calibration_latency_failed);
+        if (!inputEngine.start() || !engine.start(CALIBRATION_PULSE, volume.getProgress() / 100f, true)) {
+            inputEngine.stop(AudioInputEngine.StopReason.ERROR);
+            engine.stop(MetronomeEngine.StopReason.FAILURE);
+            failCalibration(R.string.calibration_latency_failed);
+        }
         refreshState(); // Lock the controls now rather than on the next 100 ms poll.
     }
 
@@ -414,10 +423,8 @@ public final class MetronomeActivity extends AppCompatActivity {
         latencyCalibration = new LatencyCalibration();
         sessionWithInput = true;
         calibrationStatus.setText(R.string.calibration_latency_waiting);
-        MetronomeConfig calibrationConfig = new MetronomeConfig(120, 4, 1,
-                MetronomeConfig.defaultAccents(4));
         if (!inputEngine.start()
-                || !engine.start(calibrationConfig, Math.max(.25f, volume.getProgress() / 100f), false)) {
+                || !engine.start(CALIBRATION_PULSE, Math.max(.25f, volume.getProgress() / 100f), false)) {
             inputEngine.stop(AudioInputEngine.StopReason.ERROR);
             engine.stop(MetronomeEngine.StopReason.FAILURE);
             failCalibration(R.string.calibration_latency_failed);
@@ -735,12 +742,9 @@ public final class MetronomeActivity extends AppCompatActivity {
         if (calibrationMode == CalibrationMode.IDLE) return;
         long now = System.nanoTime();
         boolean noise = calibrationMode == CalibrationMode.NOISE;
-        // The noise measurement only captures, so its absent output path never counts as stopped.
-        CalibrationSupervisor.PathState outputPath = noise
-                ? CalibrationSupervisor.PathState.RUNNING : pathOf(output.state);
         boolean clocksReady = noise || (output.clock != null
                 && output.clock.quality != MonotonicClockMapper.Quality.NONE);
-        switch (CalibrationSupervisor.check(outputPath, pathOf(input.state), input.settling,
+        switch (CalibrationSupervisor.check(pathOf(output.state), pathOf(input.state), input.settling,
                 clocksReady, now - calibrationStartedNanos, ACOUSTIC_TIMEOUT_NANOS)) {
             case INTERRUPTED:
                 stopCalibrationAudio();
@@ -768,26 +772,23 @@ public final class MetronomeActivity extends AppCompatActivity {
             float recommended = LatencyCalibration.recommendedSensitivity(averageNoise);
             sensitivity.setProgress(Math.round(recommended * 100));
             updateSensitivity();
-            AudioManager manager = (AudioManager) getSystemService(AUDIO_SERVICE);
-            calibrationRoute = AudioRouteInfo.resolve(manager, input.routeId, -1,
-                    input.sampleRate, 0, input.source);
+            calibrationRoute = routeOf(output, input);
             double dbfs = 20 * Math.log10(Math.max(1e-6, averageNoise));
             calibrationProfile = new CalibrationProfile(calibrationRoute.key, calibrationRoute.label,
                     System.currentTimeMillis(), 0, manualAdjustmentMs, dbfs, recommended, 0, 0,
                     CalibrationProfile.Confidence.UNAVAILABLE,
                     input.clockQuality == MonotonicClockMapper.Quality.HARDWARE, false);
             calibrationRepository.save(calibrationProfile);
+            loadedRouteKey = calibrationRoute.key;
             showCalibrationProfile(calibrationProfile);
             calibrationStatus.setText(getString(R.string.calibration_noise_complete,
                     dbfs, Math.round(recommended * 100)));
             calibrationMode = CalibrationMode.IDLE;
-            inputEngine.stop(AudioInputEngine.StopReason.USER);
+            stopCalibrationAudio();
             return;
         }
 
-        AudioManager manager = (AudioManager) getSystemService(AUDIO_SERVICE);
-        calibrationRoute = AudioRouteInfo.resolve(manager, input.routeId, output.routeId,
-                input.sampleRate, output.sampleRate, input.source);
+        calibrationRoute = routeOf(output, input);
         if (calibrationRoute.bluetooth) {
             engine.stop(MetronomeEngine.StopReason.USER);
             inputEngine.stop(AudioInputEngine.StopReason.USER);
@@ -828,6 +829,7 @@ public final class MetronomeActivity extends AppCompatActivity {
                     sensitivity.getProgress() / 100f, result.acceptedSamples, result.dispersionMs,
                     confidence, hardwareInput, hardwareOutput);
             calibrationRepository.save(calibrationProfile);
+            loadedRouteKey = calibrationRoute.key;
             showCalibrationProfile(calibrationProfile);
             calibrationStatus.setText(getString(R.string.calibration_latency_complete,
                     result.delayMs, result.dispersionMs, confidenceLabel(confidence)));
@@ -836,6 +838,12 @@ public final class MetronomeActivity extends AppCompatActivity {
         } catch (IllegalStateException unstable) {
             failCalibration(R.string.calibration_latency_failed);
         }
+    }
+
+    /** Single source of profile keys, so saving and loading always agree on the route. */
+    private AudioRouteInfo routeOf(MetronomeEngine.Snapshot output, AudioInputEngine.Snapshot input) {
+        return AudioRouteInfo.resolve((AudioManager) getSystemService(AUDIO_SERVICE), input.routeId,
+                output.routeId, input.sampleRate, output.sampleRate, input.source);
     }
 
     private void showCalibrationProfile(CalibrationProfile profile) {
@@ -853,9 +861,7 @@ public final class MetronomeActivity extends AppCompatActivity {
                                            AudioInputEngine.Snapshot input) {
         if (calibrationMode != CalibrationMode.IDLE || input.routeId < 0 || output.routeId < 0
                 || input.sampleRate <= 0 || output.sampleRate <= 0) return;
-        AudioManager manager = (AudioManager) getSystemService(AUDIO_SERVICE);
-        AudioRouteInfo route = AudioRouteInfo.resolve(manager, input.routeId, output.routeId,
-                input.sampleRate, output.sampleRate, input.source);
+        AudioRouteInfo route = routeOf(output, input);
         if (route.key.equals(loadedRouteKey)) return;
         loadedRouteKey = route.key;
         calibrationRoute = route;
