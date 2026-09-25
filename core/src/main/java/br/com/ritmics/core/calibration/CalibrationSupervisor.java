@@ -21,4 +21,12 @@ public final class CalibrationSupervisor {
         }
         return waitingNanos > waitTimeoutNanos ? Verdict.TIMED_OUT : Verdict.WAIT;
     }
+
+    /**
+     * True only while both paths run. Stopped engines keep reporting their last route, which
+     * must not be mistaken for the route in use when choosing a calibration profile.
+     */
+    public static boolean isLive(PathState output, PathState input) {
+        return output == PathState.RUNNING && input == PathState.RUNNING;
+    }
 }

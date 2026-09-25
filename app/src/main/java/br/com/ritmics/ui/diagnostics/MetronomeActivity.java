@@ -859,7 +859,9 @@ public final class MetronomeActivity extends AppCompatActivity {
 
     private void loadProfileForActiveRoute(MetronomeEngine.Snapshot output,
                                            AudioInputEngine.Snapshot input) {
-        if (calibrationMode != CalibrationMode.IDLE || input.routeId < 0 || output.routeId < 0
+        if (calibrationMode != CalibrationMode.IDLE
+                || !CalibrationSupervisor.isLive(pathOf(output.state), pathOf(input.state))
+                || input.routeId < 0 || output.routeId < 0
                 || input.sampleRate <= 0 || output.sampleRate <= 0) return;
         AudioRouteInfo route = routeOf(output, input);
         if (route.key.equals(loadedRouteKey)) return;

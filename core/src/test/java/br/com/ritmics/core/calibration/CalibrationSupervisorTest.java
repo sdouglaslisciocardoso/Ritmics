@@ -9,6 +9,8 @@ import static br.com.ritmics.core.calibration.CalibrationSupervisor.PathState.RU
 import static br.com.ritmics.core.calibration.CalibrationSupervisor.PathState.STARTING;
 import static br.com.ritmics.core.calibration.CalibrationSupervisor.PathState.STOPPED;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 public final class CalibrationSupervisorTest {
     private static final long TIMEOUT = 18_000_000_000L;
@@ -47,5 +49,14 @@ public final class CalibrationSupervisorTest {
 
     @Test public void runningPathsWithReadyClocksMeasure() {
         assertEquals(Verdict.MEASURE, CalibrationSupervisor.check(RUNNING, RUNNING, false, true, 0, TIMEOUT));
+    }
+
+    @Test public void onlyRunningPathsDescribeTheActiveRoute() {
+        assertTrue(CalibrationSupervisor.isLive(RUNNING, RUNNING));
+        // After a session ends the engines still report their last route, which is no longer active.
+        assertFalse(CalibrationSupervisor.isLive(STOPPED, RUNNING));
+        assertFalse(CalibrationSupervisor.isLive(RUNNING, STOPPED));
+        assertFalse(CalibrationSupervisor.isLive(STARTING, RUNNING));
+        assertFalse(CalibrationSupervisor.isLive(RUNNING, FAILED));
     }
 }
